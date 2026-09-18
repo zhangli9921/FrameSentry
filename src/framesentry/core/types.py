@@ -9,6 +9,8 @@ from typing import Any
 
 class VideoStatus(str, Enum):
     WAITING = "WAITING"
+    PREPROCESSING = "PREPROCESSING"  # FFmpeg stream-copy remux
+    READY = "READY"  # intermediate MP4 ready, waiting to scan
     SCANNING = "SCANNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"

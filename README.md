@@ -84,6 +84,14 @@ self.onnx_session = onnxruntime.InferenceSession(
 
 GUI **禁止**直接 `import nudenet`。
 
+## 功能 Features (Remux + GPU Batch)
+
+- 扫描前用 **FFmpeg stream-copy** 将队列视频快速转为本地中间 MP4（不重编码、不用 NVENC）
+- 流水线：任意时刻最多 **1 个 FFmpeg**；扫描 N 时最多只预处理 **N+1**
+- GPU **真实批推理**（默认 batch=16，可选 4/8/16/32；CPU 强制小 batch）
+- `frame_count` 无效时进度为不确定态（采样数 + 时间码 + 命中），不再假 0%
+- 复核目录 / results.json `video_path` / HTML 仍基于**原始源路径**
+
 ## 功能 Features (M1)
 
 - 添加文件 / 添加文件夹 / **拖放**（文件、文件夹、混合）；递归发现；去重（Windows 大小写不敏感）

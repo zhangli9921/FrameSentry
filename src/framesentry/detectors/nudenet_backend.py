@@ -302,6 +302,27 @@ class NudeNetBackend:
             active,
         )
 
+    def onnx_input_batch_dim(self) -> object:
+        """Return ONNX input batch dimension (str/None = dynamic, int = fixed)."""
+        try:
+            shape = self.session.get_inputs()[0].shape
+            return shape[0] if shape else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def supports_batch_gt1(self) -> bool:
+        """True when ONNX input batch dim is dynamic or >1 (real batching)."""
+        dim = self.onnx_input_batch_dim()
+        if dim is None:
+            return True
+        if isinstance(dim, str):
+            return True
+        try:
+            return int(dim) != 1
+        except (TypeError, ValueError):
+            return True
+
+
     def detect(self, image_bgr: np.ndarray) -> list[dict[str, Any]]:
         (
             preprocessed_image,

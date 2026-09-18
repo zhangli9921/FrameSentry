@@ -32,3 +32,8 @@ TARGET_CLASSES: Final[frozenset[str]] = frozenset(
 )
 
 OUTPUT_DIR_SUFFIX: Final[str] = ".framesentry_review"
+
+# GPU batched ORT inference (CPU should use 1).
+DEFAULT_BATCH_SIZE: Final[int] = 16
+BATCH_SIZE_CHOICES: Final[tuple[int, ...]] = (4, 8, 16, 32)
+DEFAULT_CPU_BATCH_SIZE: Final[int] = 1

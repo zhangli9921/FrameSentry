@@ -1,0 +1,36 @@
+name: windows-tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies (CPU ORT, no CUDA, offline-safe tests)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest PySide6 opencv-python-headless numpy onnxruntime
+          # Install project without pulling nudenet model download side-effects if possible.
+          # nudenet 3.4.2 wheel bundles 320n.onnx; still fine for import. Tests mock session.
+          pip install nudenet==3.4.2
+          pip install -e . --no-deps
+
+      - name: compileall
+        run: python -m compileall -q src tests
+
+      - name: pytest
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q --tb=short

@@ -387,4 +387,11 @@ def create_nudenet_backend(
     model_path: str | Path | None = None,
 ) -> NudeNetBackend:
     """Factory used by scanner/GUI (GUI never imports nudenet)."""
-    return NudeNetBackend(device=device, model_path=model_path)
+    logger.info("GPU/detector create begin device=%s", device)
+    try:
+        backend = NudeNetBackend(device=device, model_path=model_path)
+    except Exception:
+        logger.exception("GPU/detector create error device=%s", device)
+        raise
+    logger.info("GPU/detector create end device=%s", device)
+    return backend

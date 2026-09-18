@@ -266,5 +266,6 @@ def scan_video(
         "decode_failures": decode_failures,
         "detect_errors": detect_errors,
         "warnings": warnings,
+        "meta": meta,
         "status_note": "",
     }

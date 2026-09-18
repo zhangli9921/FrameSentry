@@ -76,6 +76,8 @@ def test_clear_review_dir_removes_stale_frames(tmp_path: Path):
     stale.write_bytes(b"jpeg")
     results = review / "results.json"
     results.write_text("{}", encoding="utf-8")
+    index = review / "index.html"
+    index.write_text("<html></html>", encoding="utf-8")
     outside = tmp_path / "source.mp4"
     outside.write_bytes(b"video")
 
@@ -83,6 +85,7 @@ def test_clear_review_dir_removes_stale_frames(tmp_path: Path):
 
     assert not stale.exists()
     assert not results.exists()
+    assert not index.exists()
     assert (review / "frames").is_dir()
     assert outside.exists()
     assert tmp_path.exists()

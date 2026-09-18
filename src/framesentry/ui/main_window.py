@@ -1,7 +1,8 @@
-"""Main window: queue table, settings, DnD import, review."""
+"""Main window: queue table, settings, DnD import, review wall, open actions."""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -35,10 +36,12 @@ from framesentry.core.config import (
 )
 from framesentry.core.input_discovery import DiscoveryResult, discover_videos, normalize_video_key
 from framesentry.core.types import VideoJob, VideoStatus
-from framesentry.detectors.nudenet_backend import create_nudenet_backend, get_ort_provider_info
 from framesentry.scanner.worker import ScanSettings
-from framesentry.ui.review_panel import ReviewPanel
+from framesentry.ui.ort_probe import OrtProbeController
+from framesentry.ui.review_panel import MODE_ALL_HITS, ReviewPanel
 from framesentry.ui.scan_controller import ScanWorker
+
+logger = logging.getLogger(__name__)
 
 _DROP_HINT = "释放以添加视频或文件夹"
 _DROP_IDLE = "拖放视频文件或文件夹到此处（或使用上方按钮）"
@@ -79,9 +82,11 @@ class MainWindow(QMainWindow):
         self._path_keys: set[str] = set()
         self._worker: ScanWorker | None = None
         self._output_root: str = str(Path.home() / "FrameSentryOutput")
+        self._ort_probe: OrtProbeController | None = None
 
         self._build_ui()
-        self._refresh_ort_info()
+        # ORT probe is started AFTER show() from main.py — never block __init__.
+        self.ort_label.setText("ORT: CUDA Provider：检测中…")
 
     # --- UI construction -------------------------------------------------
 
@@ -119,6 +124,30 @@ class MainWindow(QMainWindow):
         self.btn_start.clicked.connect(self._on_start)
         self.btn_cancel_cur.clicked.connect(self._on_cancel_current)
         self.btn_cancel_q.clicked.connect(self._on_cancel_queue)
+
+        # Review / open actions
+        open_bar = QHBoxLayout()
+        self.btn_open_review = QPushButton("打开审核页")
+        self.btn_open_folder = QPushButton("打开结果文件夹")
+        self.btn_locate_image = QPushButton("定位当前图片")
+        self.btn_open_image = QPushButton("打开原图")
+        self.btn_open_logs = QPushButton("打开日志目录")
+        for b in (
+            self.btn_open_review,
+            self.btn_open_folder,
+            self.btn_locate_image,
+            self.btn_open_image,
+            self.btn_open_logs,
+        ):
+            open_bar.addWidget(b)
+        open_bar.addStretch(1)
+        root.addLayout(open_bar)
+
+        self.btn_open_review.clicked.connect(self._on_open_review_page)
+        self.btn_open_folder.clicked.connect(self._on_open_result_folder)
+        self.btn_locate_image.clicked.connect(self._on_locate_current_image)
+        self.btn_open_image.clicked.connect(self._on_open_current_image)
+        self.btn_open_logs.clicked.connect(self._on_open_logs)
 
         # Settings row
         settings = QHBoxLayout()
@@ -181,6 +210,51 @@ class MainWindow(QMainWindow):
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(f"输出目录: {self._output_root}")
+
+    # --- ORT background probe --------------------------------------------
+
+    def start_ort_probe(self) -> None:
+        """Start non-blocking ORT provider probe (call after window.show())."""
+        self.ort_label.setText("ORT: CUDA Provider：检测中…")
+        self._ort_probe = OrtProbeController(self)
+        self._ort_probe.result.connect(self._on_ort_probe_result)
+        self._ort_probe.error.connect(self._on_ort_probe_error)
+        self._ort_probe.status.connect(self._on_ort_probe_status)
+        self._ort_probe.start()
+
+    def _on_ort_probe_status(self, msg: str) -> None:
+        if "检测中" in msg or msg.startswith("ORT"):
+            # Keep compact status in the label while probing
+            if "检测中" in msg:
+                self.ort_label.setText("ORT: CUDA Provider：检测中…")
+
+    def _on_ort_probe_result(self, info: object) -> None:
+        try:
+            available = list(getattr(info, "available_providers", ()) or ())
+            cuda_listed = bool(getattr(info, "cuda_listed", False))
+            providers = ", ".join(available) or "(none / ort not installed)"
+            cuda_ok = "是" if cuda_listed else "否"
+            self.ort_label.setText(
+                f"ORT providers: [{providers}] | 检测到 CUDA Provider：{cuda_ok}"
+            )
+            if not cuda_listed:
+                self.radio_gpu.setEnabled(False)
+                self.radio_gpu.setToolTip(
+                    "当前 ORT 未列出 CUDAExecutionProvider（不等于 GPU session 已成功；"
+                    "真正的 CUDA session 在扫描创建检测器时验证，失败会 FAILED）"
+                )
+                self.radio_cpu.setChecked(True)
+            else:
+                self.radio_gpu.setEnabled(True)
+                self.radio_gpu.setToolTip("")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("ORT probe result apply failed")
+            self._gui_error("ORT 信息更新失败", str(exc))
+
+    def _on_ort_probe_error(self, message: str) -> None:
+        self.ort_label.setText("ORT: CUDA Provider：失败")
+        logger.error("ORT probe error: %s", message)
+        self._log(f"ORT 检测失败: {message}")
 
     # --- DnD -------------------------------------------------------------
 
@@ -279,6 +353,15 @@ class MainWindow(QMainWindow):
         self.table.item(idx, 4).setText(str(job.hit_count))
         self.table.item(idx, 5).setText(job.error)
 
+    def _selected_job(self) -> VideoJob | None:
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
+            return None
+        idx = rows[0].row()
+        if 0 <= idx < len(self._jobs):
+            return self._jobs[idx]
+        return None
+
     def _on_table_select(self) -> None:
         rows = self.table.selectionModel().selectedRows()
         if not rows:
@@ -288,29 +371,90 @@ class MainWindow(QMainWindow):
             job = self._jobs[idx]
             if job.output_dir and Path(job.output_dir, "results.json").is_file():
                 try:
+                    self.review.set_mode(MODE_ALL_HITS)
                     self.review.load_review(job.output_dir)
                 except Exception as exc:  # noqa: BLE001
                     self._log(f"加载复核失败: {exc}")
+                    logger.exception("load review failed")
 
-    # --- ORT / device ----------------------------------------------------
+    # --- Open actions ----------------------------------------------------
 
-    def _refresh_ort_info(self) -> None:
-        info = get_ort_provider_info()
-        providers = ", ".join(info.available_providers) or "(none / ort not installed)"
-        cuda_ok = "是" if info.cuda_listed else "否"
-        self.ort_label.setText(
-            f"ORT providers: [{providers}] | 检测到 CUDA Provider：{cuda_ok}"
-        )
-        if not info.cuda_listed:
-            self.radio_gpu.setEnabled(False)
-            self.radio_gpu.setToolTip(
-                "当前 ORT 未列出 CUDAExecutionProvider（不等于 GPU session 已成功；"
-                "真正的 CUDA session 在扫描创建检测器时验证，失败会 FAILED）"
-            )
-            self.radio_cpu.setChecked(True)
-        else:
-            self.radio_gpu.setEnabled(True)
-            self.radio_gpu.setToolTip("")
+    def _gui_error(self, title: str, message: str) -> None:
+        logger.error("%s: %s", title, message)
+        try:
+            QMessageBox.warning(self, title, message)
+        except Exception:  # noqa: BLE001
+            pass
+        self._log(f"{title}: {message}")
+
+    def _on_open_review_page(self) -> None:
+        try:
+            from framesentry.core.platform_open import PlatformOpenError, open_html_in_browser
+
+            review_dir = self.review.review_dir()
+            if review_dir is None:
+                job = self._selected_job()
+                if job and job.output_dir:
+                    review_dir = Path(job.output_dir)
+            if review_dir is None:
+                self._gui_error("打开审核页", "没有可用的复核目录（请先完成扫描或选择任务）")
+                return
+            index = Path(review_dir) / "index.html"
+            if not index.is_file():
+                self._gui_error("打开审核页", f"未找到 index.html: {index}")
+                return
+            open_html_in_browser(index)
+        except Exception as exc:  # noqa: BLE001
+            self._gui_error("打开审核页失败", str(exc))
+
+    def _on_open_result_folder(self) -> None:
+        try:
+            from framesentry.core.platform_open import open_directory
+
+            review_dir = self.review.review_dir()
+            if review_dir is None:
+                job = self._selected_job()
+                if job and job.output_dir:
+                    review_dir = Path(job.output_dir)
+            if review_dir is None or not Path(review_dir).exists():
+                self._gui_error("打开结果文件夹", "没有可用的结果文件夹")
+                return
+            open_directory(review_dir)
+        except Exception as exc:  # noqa: BLE001
+            self._gui_error("打开结果文件夹失败", str(exc))
+
+    def _on_locate_current_image(self) -> None:
+        try:
+            from framesentry.core.platform_open import reveal_in_file_manager
+
+            path = self.review.current_frame_path()
+            if not path:
+                self._gui_error("定位当前图片", "请先在审核墙中选择一张缩略图")
+                return
+            reveal_in_file_manager(path)
+        except Exception as exc:  # noqa: BLE001
+            self._gui_error("定位当前图片失败", str(exc))
+
+    def _on_open_current_image(self) -> None:
+        try:
+            from framesentry.core.platform_open import open_path_with_default_app
+
+            path = self.review.current_frame_path()
+            if not path:
+                self._gui_error("打开原图", "请先在审核墙中选择一张缩略图")
+                return
+            open_path_with_default_app(path)
+        except Exception as exc:  # noqa: BLE001
+            self._gui_error("打开原图失败", str(exc))
+
+    def _on_open_logs(self) -> None:
+        try:
+            from framesentry.core.platform_open import open_logs_directory
+
+            opened = open_logs_directory()
+            self._log(f"已打开日志目录: {opened}")
+        except Exception as exc:  # noqa: BLE001
+            self._gui_error("打开日志目录失败", str(exc))
 
     # --- Scan control ----------------------------------------------------
 
@@ -337,7 +481,6 @@ class MainWindow(QMainWindow):
             return
         paths = [j.path for j in self._jobs if j.status == VideoStatus.WAITING]
         if not paths:
-            # Reset non-running jobs to waiting if user wants restart of failed/cancelled
             for j in self._jobs:
                 if j.status in (VideoStatus.FAILED, VideoStatus.CANCELLED, VideoStatus.COMPLETED):
                     j.status = VideoStatus.WAITING
@@ -357,6 +500,8 @@ class MainWindow(QMainWindow):
         device = settings.device
 
         def factory() -> object:
+            from framesentry.detectors.nudenet_backend import create_nudenet_backend
+
             return create_nudenet_backend(device=device)
 
         self._worker = ScanWorker(self)
@@ -409,16 +554,20 @@ class MainWindow(QMainWindow):
             job.hit_count = int(result.get("hit_count") or 0)
             job.output_dir = str(result.get("review_dir") or "")
             job.error = ""
-            # Auto-load review for completed
+            # Auto-switch to this task's all-hits review wall immediately
             try:
+                self.table.selectRow(idx)
+                self.review.set_mode(MODE_ALL_HITS)
                 self.review.load_from_memory(
                     video_path=path,
                     review_dir=job.output_dir,
                     hits=result.get("hits") or [],
                     events=result.get("events") or [],
+                    meta=result.get("meta"),
                 )
             except Exception as exc:  # noqa: BLE001
                 self._log(f"复核面板更新失败: {exc}")
+                logger.exception("review panel update failed")
         elif status == VideoStatus.FAILED:
             job.error = str(result)
             job.progress = 0.0

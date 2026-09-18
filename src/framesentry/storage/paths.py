@@ -102,6 +102,10 @@ def clear_review_dir(review_dir: str | Path) -> Path:
     if results.exists():
         _safe_unlink_under(results, review_resolved)
 
+    index_html = review / "index.html"
+    if index_html.exists():
+        _safe_unlink_under(index_html, review_resolved)
+
     # Recreate empty frames/ for the upcoming scan.
     frames_dir = review / "frames"
     if not frames_dir.exists():

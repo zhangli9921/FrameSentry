@@ -34,6 +34,8 @@ def test_main_window_init_and_dnd_flags():
     zone.set_active()
     assert "释放" in zone.text()
     zone.set_idle()
+    # ORT probe deferred — label starts in detecting state
+    assert "检测中" in win.ort_label.text() or "ORT" in win.ort_label.text()
     win.close()
 
 
@@ -46,4 +48,5 @@ def test_review_panel_init():
     app = QApplication.instance() or QApplication([])
     panel = ReviewPanel()
     panel.clear()
+    assert panel.frame_list.count() == 0
     assert panel.event_list.count() == 0

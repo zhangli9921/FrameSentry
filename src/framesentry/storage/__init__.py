@@ -8,6 +8,7 @@ from framesentry.storage.paths import (
     path_stable_id,
     review_dir_for_video,
 )
+from framesentry.storage.html_report import write_html_report
 from framesentry.storage.results import load_results, save_results
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "review_dir_for_video",
     "load_results",
     "save_results",
+    "write_html_report",
 ]

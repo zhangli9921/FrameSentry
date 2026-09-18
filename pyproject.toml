@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "framesentry"
+version = "0.1.0"
+description = "Local GPU-accelerated video content screening and review tool (初筛)"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = { text = "MIT" }
+authors = [{ name = "FrameSentry Contributors" }]
+dependencies = [
+    "PySide6>=6.5",
+    "opencv-python-headless>=4.8",
+    "numpy>=1.24",
+    "nudenet==3.4.2",
+]
+
+[project.optional-dependencies]
+cpu = ["onnxruntime>=1.16"]
+gpu = ["onnxruntime-gpu[cuda,cudnn]==1.29.0"]
+dev = [
+    "pytest>=7.4",
+    "onnxruntime>=1.16",
+]
+
+[project.scripts]
+framesentry = "framesentry.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

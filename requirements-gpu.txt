@@ -1,0 +1,6 @@
+# Windows NVIDIA GPU install (do NOT install alongside onnxruntime)
+# 1. pip uninstall -y onnxruntime onnxruntime-gpu
+# 2. pip install -r requirements-gpu.txt
+#
+# Never leave both onnxruntime and onnxruntime-gpu installed — they race.
+onnxruntime-gpu[cuda,cudnn]==1.29.0

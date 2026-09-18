@@ -1,29 +1,53 @@
 # Python
 .venv/
+venv/
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
 
 # IDE
 .idea/
 .vscode/
+*.swp
+*.swo
 
 # Build
 dist/
 build/
+*.whl
 
 # Logs
 *.log
 
-# Local runtime / models
+# Local runtime / models (do not commit onnx weights)
 models/
 runtime/
+*.onnx
 
 # Generated review output
+*.framesentry_review/
 *.nsfw_review/
 results/
+output/
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Large / portable artifacts
+*.exe
+*.msi
+*.zip
+*.7z
+portable/
+release/

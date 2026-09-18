@@ -34,3 +34,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q --tb=short
+
+      - name: PowerShell 5.1 native invoker regression
+        # Default GHA shell is pwsh (PS7). This bug is Windows PowerShell 5.1 specific.
+        # Self-test only — no pip uninstall/install and no CUDA session.
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-gpu.ps1 -NativeInvokerSelfTest

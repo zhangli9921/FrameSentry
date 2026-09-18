@@ -51,6 +51,8 @@ pip install -e . --no-deps
 powershell -ExecutionPolicy Bypass -File .\scripts\setup-gpu.ps1
 ```
 
+`scripts/setup-gpu.ps1` 同时支持 **Windows PowerShell 5.1** 与 **PowerShell 7+**（以 `$LASTEXITCODE` 判定 native 命令成败，避免 5.1 把 pip 的 stderr WARNING 当成终止错误）。
+
 脚本步骤：确认 Python 3.11 → 卸载 `onnxruntime` / `onnxruntime-gpu` → 安装 PySide6 / OpenCV / numpy → `pip install --no-deps nudenet==3.4.2` → 安装 `onnxruntime-gpu[cuda,cudnn]==1.29.0` → `pip install -e . --no-deps` → 校验 ORT 版本与 providers → **实际构造 `NudeNetBackend(device="gpu")` 并确认 session 激活 `CUDAExecutionProvider`**。
 
 等价手动步骤见 `requirements-gpu.txt` 顶部注释。

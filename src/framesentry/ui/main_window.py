@@ -33,9 +33,13 @@ from framesentry.core.config import (
     DEFAULT_THRESHOLD,
     SAMPLE_FPS_PRESETS,
     VIDEO_EXTENSIONS,
+    DEFAULT_BATCH_SIZE,
+    BATCH_SIZE_CHOICES,
 )
 from framesentry.core.input_discovery import DiscoveryResult, discover_videos, normalize_video_key
 from framesentry.core.types import VideoJob, VideoStatus
+from framesentry.core.ffmpeg import resolve_ffmpeg
+from framesentry.scanner.preprocess import default_intermediate_dir
 from framesentry.scanner.worker import ScanSettings
 from framesentry.ui.ort_probe import OrtProbeController
 from framesentry.ui.review_panel import MODE_ALL_HITS, ReviewPanel
@@ -82,6 +86,7 @@ class MainWindow(QMainWindow):
         self._path_keys: set[str] = set()
         self._worker: ScanWorker | None = None
         self._output_root: str = str(Path.home() / "FrameSentryOutput")
+        self._intermediate_dir: str = str(default_intermediate_dir())
         self._ort_probe: OrtProbeController | None = None
 
         self._build_ui()
@@ -101,6 +106,7 @@ class MainWindow(QMainWindow):
         self.btn_add_folder = QPushButton("添加文件夹")
         self.btn_clear = QPushButton("清空列表")
         self.btn_output = QPushButton("输出目录…")
+        self.btn_intermediate = QPushButton("中间MP4目录…")
         self.btn_start = QPushButton("开始扫描")
         self.btn_cancel_cur = QPushButton("取消当前")
         self.btn_cancel_q = QPushButton("取消队列")
@@ -109,6 +115,7 @@ class MainWindow(QMainWindow):
             self.btn_add_folder,
             self.btn_clear,
             self.btn_output,
+            self.btn_intermediate,
             self.btn_start,
             self.btn_cancel_cur,
             self.btn_cancel_q,
@@ -121,6 +128,7 @@ class MainWindow(QMainWindow):
         self.btn_add_folder.clicked.connect(self._on_add_folder)
         self.btn_clear.clicked.connect(self._on_clear)
         self.btn_output.clicked.connect(self._on_choose_output)
+        self.btn_intermediate.clicked.connect(self._on_choose_intermediate)
         self.btn_start.clicked.connect(self._on_start)
         self.btn_cancel_cur.clicked.connect(self._on_cancel_current)
         self.btn_cancel_q.clicked.connect(self._on_cancel_queue)
@@ -176,6 +184,16 @@ class MainWindow(QMainWindow):
         self.threshold_spin.setDecimals(2)
         self.threshold_spin.setValue(DEFAULT_THRESHOLD)
         settings.addWidget(self.threshold_spin)
+
+        settings.addWidget(QLabel("批大小:"))
+        self.batch_combo = QComboBox()
+        for b in BATCH_SIZE_CHOICES:
+            self.batch_combo.addItem(str(b), b)
+        self.batch_combo.setCurrentIndex(
+            list(BATCH_SIZE_CHOICES).index(DEFAULT_BATCH_SIZE)
+            if DEFAULT_BATCH_SIZE in BATCH_SIZE_CHOICES else 0
+        )
+        settings.addWidget(self.batch_combo)
 
         self.ort_label = QLabel("ORT: …")
         self.ort_label.setWordWrap(True)
@@ -329,6 +347,14 @@ class MainWindow(QMainWindow):
 
     # --- Table helpers ---------------------------------------------------
 
+
+    def _on_choose_intermediate(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "选择中间 MP4 目录", self._intermediate_dir)
+        if d:
+            self._intermediate_dir = d
+            self.statusBar().showMessage(f"中间MP4目录: {self._intermediate_dir}")
+
+
     def _append_row(self, job: VideoJob) -> None:
         r = self.table.rowCount()
         self.table.insertRow(r)
@@ -348,8 +374,18 @@ class MainWindow(QMainWindow):
 
     def _update_row(self, idx: int) -> None:
         job = self._jobs[idx]
-        self.table.item(idx, 2).setText(job.status.value)
-        self.table.item(idx, 3).setText(f"{job.progress:.0f}%")
+        status_text = job.status.value
+        if job.status == VideoStatus.PREPROCESSING:
+            status_text = "PREPROCESSING (快速转 MP4)"
+        elif job.status == VideoStatus.SCANNING:
+            status_text = "SCANNING (GPU 扫描)"
+        elif job.status == VideoStatus.READY:
+            status_text = "READY"
+        self.table.item(idx, 2).setText(status_text)
+        if job.progress < 0:
+            self.table.item(idx, 3).setText("…")
+        else:
+            self.table.item(idx, 3).setText(f"{job.progress:.0f}%")
         self.table.item(idx, 4).setText(str(job.hit_count))
         self.table.item(idx, 5).setText(job.error)
 
@@ -468,11 +504,17 @@ class MainWindow(QMainWindow):
                 fps = DEFAULT_SAMPLE_FPS
         else:
             fps = float(fps_data)
+        batch_data = self.batch_combo.currentData()
+        batch_size = int(batch_data) if batch_data is not None else DEFAULT_BATCH_SIZE
+        if device == "cpu":
+            batch_size = 1
         return ScanSettings(
             sample_fps=fps,
             threshold=float(self.threshold_spin.value()),
             device=device,
             output_root=self._output_root,
+            batch_size=batch_size,
+            intermediate_dir=self._intermediate_dir,
         )
 
     def _on_start(self) -> None:
@@ -504,16 +546,37 @@ class MainWindow(QMainWindow):
 
             return create_nudenet_backend(device=device)
 
-        self._worker = ScanWorker(self)
-        self._worker.configure(paths, settings, factory)
-        self._worker.job_started.connect(self._on_job_started)
-        self._worker.job_progress.connect(self._on_job_progress)
-        self._worker.job_finished.connect(self._on_job_finished)
-        self._worker.queue_finished.connect(self._on_queue_finished)
-        self._worker.log_message.connect(self._log)
+        if not resolve_ffmpeg():
+            QMessageBox.warning(
+                self,
+                "FrameSentry",
+                "未找到 FFmpeg。\n\n请设置环境变量 FRAMESENTRY_FFMPEG 指向本地 ffmpeg，"
+                "或将其加入 PATH。\nFrameSentry 不会自动下载 FFmpeg；未找到时不会启动 NudeNet 扫描。",
+            )
+            self._log("错误: 未找到 FFmpeg，已中止启动")
+            return
+
+        Path(settings.intermediate_dir).mkdir(parents=True, exist_ok=True)
+
+        worker = ScanWorker(self)
+        self._worker = worker
+        worker.configure(paths, settings, factory)
+        worker.job_started.connect(self._on_job_started)
+        worker.job_status.connect(self._on_job_status)
+        worker.job_progress.connect(self._on_job_progress)
+        worker.job_finished.connect(self._on_job_finished)
+        worker.queue_finished.connect(self._on_queue_finished)
+        # Bind finished to THIS worker instance so a newer worker is not cleared.
+        worker.finished.connect(
+            lambda *args, w=worker: self._on_worker_thread_finished(w)
+        )
+        worker.log_message.connect(self._log)
         self.btn_start.setEnabled(False)
-        self._worker.start()
-        self._log(f"开始扫描 {len(paths)} 个视频 (device={device})")
+        worker.start()
+        self._log(
+            f"开始扫描 {len(paths)} 个视频 (device={device}, batch={settings.batch_size}, "
+            f"intermediate={settings.intermediate_dir})"
+        )
 
     def _on_cancel_current(self) -> None:
         if self._worker and self._worker.isRunning():
@@ -528,15 +591,37 @@ class MainWindow(QMainWindow):
     def _on_job_started(self, path: str) -> None:
         idx = self._find_row(path)
         if idx >= 0:
-            self._jobs[idx].status = VideoStatus.SCANNING
+            # Status refined by job_status (PREPROCESSING vs SCANNING)
+            if self._jobs[idx].status == VideoStatus.WAITING:
+                self._jobs[idx].status = VideoStatus.PREPROCESSING
             self._jobs[idx].progress = 0.0
             self._jobs[idx].error = ""
             self._update_row(idx)
 
+    def _on_job_status(self, path: str, status_name: str) -> None:
+        idx = self._find_row(path)
+        if idx < 0:
+            return
+        try:
+            status = VideoStatus(status_name)
+        except ValueError:
+            return
+        self._jobs[idx].status = status
+        self._update_row(idx)
+        # Distinct log labels: 快速转 MP4 vs GPU 扫描
+        if status == VideoStatus.PREPROCESSING:
+            self._log(f"快速转 MP4: {path}")
+        elif status == VideoStatus.SCANNING:
+            self._log(f"GPU/CPU 扫描: {path}")
+
     def _on_job_progress(self, path: str, pct: float, message: str) -> None:
         idx = self._find_row(path)
         if idx >= 0:
+            # pct < 0 → indeterminate (unknown frame_count); keep message in error/status col lightly
             self._jobs[idx].progress = pct
+            if pct < 0 and message:
+                # Show sampled/timecode/hits text in status bar; table shows "…"
+                self.statusBar().showMessage(message, 2000)
             self._update_row(idx)
 
     def _on_job_finished(self, path: str, status_name: str, result: object) -> None:
@@ -579,6 +664,12 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(True)
         self._log("队列完成")
         self.statusBar().showMessage("队列完成", 5000)
+
+    def _on_worker_thread_finished(self, worker: ScanWorker) -> None:
+        """QThread finished → deleteLater; only clear ref if it is still this worker."""
+        if self._worker is worker:
+            self._worker = None
+        worker.deleteLater()
 
     # --- feedback --------------------------------------------------------
 

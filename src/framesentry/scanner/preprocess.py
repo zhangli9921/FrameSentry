@@ -99,11 +99,14 @@ def preprocess_video(
     ffmpeg_bin: str | None = None,
     should_cancel: CancelCheck | None = None,
     process_handle: FFmpegProcessHandle | None = None,
-    reuse_existing: bool = True,
+    reuse_existing: bool = False,
 ) -> PreprocessResult:
     """Stream-copy remux ``source`` into the intermediate dir.
 
-    Review / results identity must still use ``source_path`` (original).
+    By default ``reuse_existing=False`` so every new scan remuxes (``.part.mp4``
+    then atomic replace). On remux failure the task is PREPROCESS FAILED and
+    must not fall back to scanning a stale final MP4. Old finals may remain on
+    disk until a successful replace. Review identity still uses ``source_path``.
     """
     src = Path(source_path)
     out_dir = ensure_intermediate_dir(intermediate_dir)

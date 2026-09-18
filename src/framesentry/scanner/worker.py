@@ -174,6 +174,7 @@ def scan_video(
     batch_runs = 0
 
     t_decode = 0.0
+    t_preprocess_tensor = 0.0
     t_inference = 0.0
     t_frame_save = 0.0
     t_postprocess = 0.0
@@ -206,31 +207,40 @@ def scan_video(
         progress(pct, msg)
 
     def flush_batch() -> None:
-        nonlocal sampled, detect_errors, batch_runs, t_inference, t_frame_save, t_postprocess
+        nonlocal sampled, detect_errors, batch_runs, t_preprocess_tensor, t_inference, t_frame_save, t_postprocess
         if not buffer:
             return
         if should_cancel and should_cancel():
             raise ScanCancelled(f"cancelled: {video_path}")
 
         frames = [s.frame for s in buffer]
-        t_inf0 = time.perf_counter()
+        frame_lo = buffer[0].frame_idx
+        frame_hi = buffer[-1].frame_idx
         try:
             if hasattr(detector, "detect_batch"):
                 batch_out = detector.detect_batch(frames, batch_size=len(frames))
             else:
                 batch_out = [detector.detect(f) for f in frames]
         except Exception as exc:  # noqa: BLE001
-            detect_errors += len(buffer)
-            warnings.append(f"detect_batch error near frame {buffer[0].frame_idx}: {exc}")
-            logger.warning("detect_batch error: %s", exc)
+            logger.error(
+                "detect_batch failed frames [%s, %s] (n=%s): %s",
+                frame_lo,
+                frame_hi,
+                len(buffer),
+                exc,
+            )
             buffer.clear()
-            t_inference += time.perf_counter() - t_inf0
-            return
-        t_inference += time.perf_counter() - t_inf0
+            raise
+
+        timing = getattr(detector, "last_batch_timing", None) or {}
+        t_preprocess_tensor += float(timing.get("preprocess_tensor_sec", 0.0))
+        t_inference += float(timing.get("inference_sec", 0.0))
+        # NudeNet _postprocess time; target-class filter measured below.
+        t_postprocess += float(timing.get("postprocess_sec", 0.0))
         batch_runs += 1
 
-        t_post0 = time.perf_counter()
         for sample, raw in zip(buffer, batch_out):
+            t_filt0 = time.perf_counter()
             try:
                 filtered = filter_target_detections(
                     raw, threshold=settings.threshold, target_classes=TARGET_CLASSES
@@ -239,7 +249,9 @@ def scan_video(
                 detect_errors += 1
                 warnings.append(f"filter error at frame {sample.frame_idx}: {exc}")
                 sampled += 1
+                t_postprocess += time.perf_counter() - t_filt0
                 continue
+            t_postprocess += time.perf_counter() - t_filt0
 
             fname: str | None = None
             if filtered:
@@ -271,7 +283,6 @@ def scan_video(
                         )
                     )
             sampled += 1
-        t_postprocess += time.perf_counter() - t_post0
 
         progress_update(f"batches={batch_runs}")
         buffer.clear()
@@ -380,6 +391,7 @@ def scan_video(
         "onnx_supports_batch_gt1": supports_batch,
         "active_ort_providers": active_providers,
         "decode_sec": round(t_decode, 3),
+        "preprocess_tensor_sec": round(t_preprocess_tensor, 3),
         "inference_sec": round(t_inference, 3),
         "postprocess_sec": round(t_postprocess, 3),
         "frame_save_sec": round(t_frame_save, 3),
@@ -387,6 +399,9 @@ def scan_video(
         "sampled_fps": round(sampled_fps, 3),
         "ms_per_batch": round(ms_per_batch, 3),
         "ms_per_frame": round(ms_per_frame, 3),
+        "inference_ms_per_frame": round(
+            (t_inference * 1000.0 / sampled) if sampled else 0.0, 3
+        ),
     }
 
     resolved_source = str(source_path.resolve()) if source_path.exists() else str(source_path)

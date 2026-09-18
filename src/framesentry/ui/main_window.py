@@ -86,6 +86,7 @@ class MainWindow(QMainWindow):
         self._path_keys: set[str] = set()
         self._worker: ScanWorker | None = None
         self._output_root: str = str(Path.home() / "FrameSentryOutput")
+        self._intermediate_dir: str = str(default_intermediate_dir())
         self._ort_probe: OrtProbeController | None = None
 
         self._build_ui()
@@ -557,17 +558,21 @@ class MainWindow(QMainWindow):
 
         Path(settings.intermediate_dir).mkdir(parents=True, exist_ok=True)
 
-        self._worker = ScanWorker(self)
-        self._worker.configure(paths, settings, factory)
-        self._worker.job_started.connect(self._on_job_started)
-        self._worker.job_status.connect(self._on_job_status)
-        self._worker.job_progress.connect(self._on_job_progress)
-        self._worker.job_finished.connect(self._on_job_finished)
-        self._worker.queue_finished.connect(self._on_queue_finished)
-        self._worker.finished.connect(self._on_worker_thread_finished)
-        self._worker.log_message.connect(self._log)
+        worker = ScanWorker(self)
+        self._worker = worker
+        worker.configure(paths, settings, factory)
+        worker.job_started.connect(self._on_job_started)
+        worker.job_status.connect(self._on_job_status)
+        worker.job_progress.connect(self._on_job_progress)
+        worker.job_finished.connect(self._on_job_finished)
+        worker.queue_finished.connect(self._on_queue_finished)
+        # Bind finished to THIS worker instance so a newer worker is not cleared.
+        worker.finished.connect(
+            lambda *args, w=worker: self._on_worker_thread_finished(w)
+        )
+        worker.log_message.connect(self._log)
         self.btn_start.setEnabled(False)
-        self._worker.start()
+        worker.start()
         self._log(
             f"开始扫描 {len(paths)} 个视频 (device={device}, batch={settings.batch_size}, "
             f"intermediate={settings.intermediate_dir})"
@@ -660,12 +665,11 @@ class MainWindow(QMainWindow):
         self._log("队列完成")
         self.statusBar().showMessage("队列完成", 5000)
 
-    def _on_worker_thread_finished(self) -> None:
-        """QThread finished → deleteLater → clear reference (no worker accumulation)."""
-        worker = self._worker
-        self._worker = None
-        if worker is not None:
-            worker.deleteLater()
+    def _on_worker_thread_finished(self, worker: ScanWorker) -> None:
+        """QThread finished → deleteLater; only clear ref if it is still this worker."""
+        if self._worker is worker:
+            self._worker = None
+        worker.deleteLater()
 
     # --- feedback --------------------------------------------------------
 

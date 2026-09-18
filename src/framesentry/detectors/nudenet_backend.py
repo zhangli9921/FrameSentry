@@ -35,6 +35,8 @@ the stock ``_read_image`` path exactly (only ORT providers differ).
 
 from __future__ import annotations
 
+import time
+
 import _io
 from pathlib import Path
 from typing import Any, Sequence
@@ -295,6 +297,11 @@ class NudeNetBackend:
 
         model_inputs = self.session.get_inputs()
         self.input_name = model_inputs[0].name
+        self.last_batch_timing: dict[str, float] = {
+            "preprocess_tensor_sec": 0.0,
+            "inference_sec": 0.0,
+            "postprocess_sec": 0.0,
+        }
         logger.info(
             "NudeNetBackend ready device=%s requested=%s active=%s",
             self.device,
@@ -349,12 +356,22 @@ class NudeNetBackend:
     def detect_batch(
         self, images_bgr: list[np.ndarray], batch_size: int = 4
     ) -> list[list[dict[str, Any]]]:
-        """Batch detect like stock NudeNet (vstack blobs). Safe for equal-size pads."""
+        """Batch detect like stock NudeNet (vstack blobs). Safe for equal-size pads.
+
+        Timing (summed across mini-batches) is stored on ``self.last_batch_timing``:
+        - preprocess_tensor_sec: ``_read_image_bgr`` + vstack only
+        - inference_sec: ONLY ``session.run(...)``
+        - postprocess_sec: NudeNet ``_postprocess`` only (not target filter / JPEG)
+        """
         all_detections: list[list[dict[str, Any]]] = []
+        t_preprocess = 0.0
+        t_inference = 0.0
+        t_postprocess = 0.0
         for i in range(0, len(images_bgr), batch_size):
             batch = images_bgr[i : i + batch_size]
             batch_inputs: list[np.ndarray] = []
             batch_metadata: list[tuple] = []
+            t0 = time.perf_counter()
             for image in batch:
                 (
                     preprocessed_image,
@@ -377,7 +394,11 @@ class NudeNetBackend:
                     )
                 )
             batch_input = np.vstack(batch_inputs)
+            t_preprocess += time.perf_counter() - t0
+            t1 = time.perf_counter()
             outputs = self.session.run(None, {self.input_name: batch_input})
+            t_inference += time.perf_counter() - t1
+            t2 = time.perf_counter()
             for j, metadata in enumerate(batch_metadata):
                 (
                     x_ratio,
@@ -399,6 +420,12 @@ class NudeNetBackend:
                     self.input_height,
                 )
                 all_detections.append(detections)
+            t_postprocess += time.perf_counter() - t2
+        self.last_batch_timing = {
+            "preprocess_tensor_sec": t_preprocess,
+            "inference_sec": t_inference,
+            "postprocess_sec": t_postprocess,
+        }
         return all_detections
 
 

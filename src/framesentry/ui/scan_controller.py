@@ -56,7 +56,16 @@ class ScanWorker(QThread):
             self._mutex.unlock()
         pipe = self._pipeline
         if pipe is not None:
-            pipe.kill_ffmpeg()
+            # Only kill ffmpeg that belongs to the current file, never ahead.
+            pipe.cancel_current_ffmpeg()
+
+    def clear_cancel_current(self) -> None:
+        """Reset cancel-current so the next file is not auto-cancelled."""
+        self._mutex.lock()
+        try:
+            self._cancel_current = False
+        finally:
+            self._mutex.unlock()
 
     def request_cancel_queue(self) -> None:
         self._mutex.lock()
@@ -150,6 +159,7 @@ class ScanWorker(QThread):
             ffmpeg_bin=ffmpeg_bin,
             should_cancel_current=lambda: self._flags()[0],
             should_cancel_queue=lambda: self._flags()[1],
+            clear_cancel_current=self.clear_cancel_current,
             on_status=on_status,
             on_progress=on_progress,
             on_finished=on_finished,

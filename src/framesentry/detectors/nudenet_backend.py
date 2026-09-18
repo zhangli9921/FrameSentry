@@ -21,6 +21,14 @@ We must NOT patch site-packages. Instead ``NudeNetBackend``:
 
 ``detect_batch`` stacks blobs like stock NudeNet when safe; scanner may also call
 ``detect`` per frame.
+
+Preprocess note (OpenCV BGR video frames)
+-----------------------------------------
+Stock NudeNet 3.4.2 always runs ``cv2.cvtColor(mat, cv2.COLOR_RGBA2BGR)`` before
+``blobFromImage(..., swapRB=True)``. On a 3-channel BGR ndarray that conversion
+swaps R/B; combined with swapRB the model input matches stock. Treating BGR as-is
+then swapRB alone inverts channels relative to stock — FrameSentry must mirror
+the stock ``_read_image`` path exactly (only ORT providers differ).
 """
 
 from __future__ import annotations
@@ -115,7 +123,12 @@ def select_providers(device: str) -> list[str]:
 
 
 def _read_image_bgr(image: Any, target_size: int = 320) -> tuple:
-    """Preprocess equivalent to NudeNet 3.4.2 ``_read_image`` for BGR ndarray/path."""
+    """Preprocess matching NudeNet 3.4.2 ``_read_image`` (incl. 3ch BGR path).
+
+    Stock always applies ``cv2.cvtColor(mat, cv2.COLOR_RGBA2BGR)`` even for
+    3-channel OpenCV BGR frames, then ``blobFromImage(..., swapRB=True)``.
+    Skipping that conversion causes RGB/BGR inversion vs stock model input.
+    """
     if isinstance(image, str):
         mat = cv2.imread(image)
         if mat is None:
@@ -134,13 +147,12 @@ def _read_image_bgr(image: Any, target_size: int = 320) -> tuple:
 
     image_original_width, image_original_height = mat.shape[1], mat.shape[0]
 
-    # Match stock: COLOR_RGBA2BGR (works for BGR 3ch / BGRA 4ch mats similarly).
+    # Match stock NudeNet 3.4.2 exactly (including 3-channel BGR ndarrays).
+    # Grayscale is outside stock's documented path; convert to BGR first so
+    # COLOR_RGBA2BGR can run the same channel swap as stock on 3ch mats.
     if mat.ndim == 2:
-        mat_c3 = cv2.cvtColor(mat, cv2.COLOR_GRAY2BGR)
-    elif mat.shape[2] == 4:
-        mat_c3 = cv2.cvtColor(mat, cv2.COLOR_BGRA2BGR)
-    else:
-        mat_c3 = mat
+        mat = cv2.cvtColor(mat, cv2.COLOR_GRAY2BGR)
+    mat_c3 = cv2.cvtColor(mat, cv2.COLOR_RGBA2BGR)
 
     max_size = max(mat_c3.shape[:2])
     x_pad = max_size - mat_c3.shape[1]

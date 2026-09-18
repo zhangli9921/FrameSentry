@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QSplitter,
@@ -21,9 +22,14 @@ from PySide6.QtWidgets import (
 from framesentry.core.types import DetectionEvent, DetectionHit
 from framesentry.storage.results import load_results
 
+# Thumbnail side length — keep memory light; full image only on demand.
+_THUMB_SIZE = 96
+_THUMB_ROLE_PATH = Qt.ItemDataRole.UserRole
+_THUMB_ROLE_EVENT_IDX = Qt.ItemDataRole.UserRole + 1
+
 
 class ReviewPanel(QWidget):
-    """Shows event clusters; expand raw hits; click to enlarge; show source video."""
+    """Shows event clusters with lightweight thumbnails; expand raw hits; enlarge."""
 
     frame_selected = Signal(str)  # absolute frame path
 
@@ -35,6 +41,15 @@ class ReviewPanel(QWidget):
         self._video_path: str = ""
 
         self.event_list = QListWidget()
+        self.event_list.setViewMode(QListView.ViewMode.IconMode)
+        self.event_list.setIconSize(QSize(_THUMB_SIZE, _THUMB_SIZE))
+        self.event_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.event_list.setMovement(QListView.Movement.Static)
+        self.event_list.setWordWrap(True)
+        self.event_list.setSpacing(8)
+        self.event_list.setGridSize(QSize(_THUMB_SIZE + 48, _THUMB_SIZE + 72))
+        self.event_list.setUniformItemSizes(False)
+
         self.hit_list = QListWidget()
         self.preview = QLabel("选择事件以预览最佳帧")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -45,7 +60,7 @@ class ReviewPanel(QWidget):
         self.meta.setMaximumHeight(100)
 
         left = QVBoxLayout()
-        left.addWidget(QLabel("Detection Events"))
+        left.addWidget(QLabel("Detection Events (缩略图)"))
         left.addWidget(self.event_list)
         left.addWidget(QLabel("Raw hits (event)"))
         left.addWidget(self.hit_list)
@@ -103,14 +118,7 @@ class ReviewPanel(QWidget):
         self._hits = data.get("_hits") or []
         self._events = data.get("_events") or []
         self._video_path = str(data.get("video_path") or "")
-        self.event_list.clear()
-        self.hit_list.clear()
-        for ev in self._events:
-            text = (
-                f"[{ev.start_str} → {ev.end_str}] n={ev.count} "
-                f"max={ev.max_score:.2f} {','.join(ev.classes)}"
-            )
-            self.event_list.addItem(QListWidgetItem(text))
+        self._populate_events()
         self._set_meta()
 
     def load_from_memory(
@@ -125,15 +133,45 @@ class ReviewPanel(QWidget):
         self._hits = list(hits)
         self._events = list(events)
         self._video_path = video_path
+        self._populate_events()
+        self._set_meta()
+
+    def _populate_events(self) -> None:
         self.event_list.clear()
         self.hit_list.clear()
-        for ev in self._events:
+        for i, ev in enumerate(self._events):
+            classes = ",".join(ev.classes) if ev.classes else "?"
             text = (
-                f"[{ev.start_str} → {ev.end_str}] n={ev.count} "
-                f"max={ev.max_score:.2f} {','.join(ev.classes)}"
+                f"{ev.start_str} → {ev.end_str}\n"
+                f"{classes}\nmax={ev.max_score:.2f} n={ev.count}"
             )
-            self.event_list.addItem(QListWidgetItem(text))
-        self._set_meta()
+            item = QListWidgetItem(text)
+            thumb = self._load_thumbnail(ev.best_frame_filename)
+            if thumb is not None:
+                item.setIcon(QIcon(thumb))
+            item.setData(_THUMB_ROLE_EVENT_IDX, i)
+            item.setData(_THUMB_ROLE_PATH, ev.best_frame_filename)
+            item.setToolTip(
+                f"[{ev.start_str} → {ev.end_str}] {classes} "
+                f"max={ev.max_score:.2f} hits={ev.count}"
+            )
+            self.event_list.addItem(item)
+
+    def _load_thumbnail(self, filename: str | None) -> QPixmap | None:
+        """Load a size-capped thumbnail without keeping full-resolution images."""
+        path = self._frame_path(filename)
+        if path is None:
+            return None
+        # QPixmap loads via Qt; we immediately scale down and discard full size.
+        pix = QPixmap(str(path))
+        if pix.isNull():
+            return None
+        return pix.scaled(
+            _THUMB_SIZE,
+            _THUMB_SIZE,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
 
     def _on_event_selected(self, row: int) -> None:
         self.hit_list.clear()
@@ -172,6 +210,7 @@ class ReviewPanel(QWidget):
         if path is None:
             self.preview.setText("无帧图")
             return
+        # Preview scales to widget; avoid retaining extra full-size copies beyond Qt cache.
         pix = QPixmap(str(path))
         if pix.isNull():
             self.preview.setText("无法加载帧图")

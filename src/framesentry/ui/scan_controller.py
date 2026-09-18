@@ -7,7 +7,12 @@ from typing import Any
 from PySide6.QtCore import QMutex, QThread, Signal, QObject
 
 from framesentry.core.types import VideoStatus
-from framesentry.scanner.worker import ScanCancelled, ScanSettings, scan_video
+from framesentry.scanner.worker import (
+    ScanCancelled,
+    ScanSettings,
+    UnreadableVideoError,
+    scan_video,
+)
 
 
 class ScanWorker(QThread):
@@ -124,11 +129,14 @@ class ScanWorker(QThread):
                 self.log_message.emit(
                     f"Completed: {path} hits={result.get('hit_count', 0)}"
                 )
-            except ScanCancelled:
+            except ScanCancelled as exc:
                 self.job_finished.emit(path, VideoStatus.CANCELLED.value, "cancelled")
-                self.log_message.emit(f"Cancelled: {path}")
+                self.log_message.emit(f"CANCELLED: {path} — {exc}")
+            except UnreadableVideoError as exc:
+                self.job_finished.emit(path, VideoStatus.FAILED.value, str(exc))
+                self.log_message.emit(f"FAILED (unreadable): {path} — {exc}")
             except Exception as exc:  # noqa: BLE001 — one failure must not stop queue
                 self.job_finished.emit(path, VideoStatus.FAILED.value, str(exc))
-                self.log_message.emit(f"Failed: {path} — {exc}")
+                self.log_message.emit(f"FAILED: {path} — {exc}")
 
         self.queue_finished.emit()

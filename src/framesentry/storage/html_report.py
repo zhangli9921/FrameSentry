@@ -123,10 +123,15 @@ def _event_section_html(
                 if key not in seen:
                     cards.insert(0, _card_html(group))
                     seen.add(key)
+        cards_html = "".join(cards) if cards else '<p class="empty">无帧</p>'
         parts.append(
-            f'<section class="event" id="event-{i}">'
-            f"{header}<div class=\"grid\">{''.join(cards) or '<p class=\"empty\">无帧</p>'}"
-            f"</div></section>"
+            '<section class="event" id="event-'
+            + str(i)
+            + '">'
+            + header
+            + '<div class="grid">'
+            + cards_html
+            + "</div></section>"
         )
     return "\n".join(parts)
 

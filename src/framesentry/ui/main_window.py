@@ -297,13 +297,16 @@ class MainWindow(QMainWindow):
     def _refresh_ort_info(self) -> None:
         info = get_ort_provider_info()
         providers = ", ".join(info.available_providers) or "(none / ort not installed)"
-        gpu_ok = "是" if info.gpu_mode_usable else "否"
+        cuda_ok = "是" if info.cuda_listed else "否"
         self.ort_label.setText(
-            f"ORT providers: [{providers}] | GPU模式可用: {gpu_ok}"
+            f"ORT providers: [{providers}] | 检测到 CUDA Provider：{cuda_ok}"
         )
-        if not info.gpu_mode_usable:
+        if not info.cuda_listed:
             self.radio_gpu.setEnabled(False)
-            self.radio_gpu.setToolTip("当前 ORT 未列出 CUDAExecutionProvider")
+            self.radio_gpu.setToolTip(
+                "当前 ORT 未列出 CUDAExecutionProvider（不等于 GPU session 已成功；"
+                "真正的 CUDA session 在扫描创建检测器时验证，失败会 FAILED）"
+            )
             self.radio_cpu.setChecked(True)
         else:
             self.radio_gpu.setEnabled(True)

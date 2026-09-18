@@ -2,6 +2,7 @@
 
 from framesentry.storage.frames import annotate_and_save_frame, safe_frame_filename
 from framesentry.storage.paths import (
+    UnsafeReviewPathError,
     clear_review_dir,
     ensure_review_dirs,
     path_stable_id,
@@ -10,6 +11,7 @@ from framesentry.storage.paths import (
 from framesentry.storage.results import load_results, save_results
 
 __all__ = [
+    "UnsafeReviewPathError",
     "annotate_and_save_frame",
     "safe_frame_filename",
     "clear_review_dir",

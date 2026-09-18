@@ -59,17 +59,56 @@ print('onnxruntime.__version__ =', ort.__version__)
 providers = ort.get_available_providers()
 print('get_available_providers() =', providers)
 if 'CUDAExecutionProvider' not in providers:
-    print('WARNING: CUDAExecutionProvider not listed. Check NVIDIA driver; '
-          'GPU mode will hard-fail until CUDA EP is available.')
-else:
-    print('[ok] CUDAExecutionProvider listed')
+    print('ERROR: CUDAExecutionProvider not listed in get_available_providers(). '
+          'Check NVIDIA driver / onnxruntime-gpu install.', file=sys.stderr)
+    sys.exit(4)
+print('[ok] CUDAExecutionProvider listed')
 "@
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "ORT verification failed (exit $LASTEXITCODE)"
+    Write-Error "ORT verification failed (exit $LASTEXITCODE). Setup NOT complete."
+    exit $LASTEXITCODE
+}
+
+# 8. Project-level smoke: actually construct NudeNetBackend(device="gpu")
+#    and verify the live session activated CUDAExecutionProvider.
+Write-Host "Smoke-testing FrameSentry NudeNet CUDA InferenceSession..."
+python -c @"
+import sys
+
+from framesentry.detectors.nudenet_backend import NudeNetBackend
+
+try:
+    backend = NudeNetBackend(device='gpu')
+except Exception as exc:
+    print(f'ERROR: NudeNetBackend(device="gpu") failed: {exc}', file=sys.stderr)
+    sys.exit(5)
+
+active = list(backend.session.get_providers())
+print('active providers:', active)
+if not active or active[0] != 'CUDAExecutionProvider':
+    if 'CUDAExecutionProvider' not in active:
+        print(
+            'ERROR: CUDAExecutionProvider not active on NudeNet session. '
+            f'Active: {active}',
+            file=sys.stderr,
+        )
+        sys.exit(6)
+    print(
+        'ERROR: CUDAExecutionProvider is not the first/active primary provider. '
+        f'Active: {active}',
+        file=sys.stderr,
+    )
+    sys.exit(6)
+
+print('FrameSentry NudeNet CUDA session: OK')
+"@
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "NudeNet CUDA session smoke failed (exit $LASTEXITCODE). Setup NOT complete."
     exit $LASTEXITCODE
 }
 
 Write-Host "=== FrameSentry GPU setup complete ===" -ForegroundColor Green
 Write-Host "Launch: python -m framesentry   (or framesentry)"
-Write-Host "Confirm GUI shows GPU模式可用: 是 and providers include CUDAExecutionProvider."
+Write-Host "GUI should show 检测到 CUDA Provider：是 ; real CUDA session is verified above."

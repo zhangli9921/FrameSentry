@@ -86,3 +86,40 @@ def test_clear_review_dir_removes_stale_frames(tmp_path: Path):
     assert (review / "frames").is_dir()
     assert outside.exists()
     assert tmp_path.exists()
+
+
+def test_clear_review_dir_refuses_symlink_review_root(tmp_path: Path):
+    """If review_dir itself is a symlink, refuse cleanup — do not wipe target."""
+    import os
+    import pytest
+
+    from framesentry.storage.paths import UnsafeReviewPathError
+
+    external = tmp_path / "external_real"
+    frames = external / "frames"
+    frames.mkdir(parents=True)
+    keep = frames / "keep.jpg"
+    keep.write_bytes(b"jpeg-keep")
+    ext_results = external / "results.json"
+    ext_results.write_text('{"keep": true}', encoding="utf-8")
+
+    out = tmp_path / "out"
+    out.mkdir()
+    link = out / "clip.abc123def0.framesentry_review"
+
+    try:
+        os.symlink(external, link, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create directory symlink on this platform: {exc}")
+
+    assert link.is_symlink()
+
+    with pytest.raises(UnsafeReviewPathError):
+        clear_review_dir(link)
+
+    assert keep.is_file()
+    assert keep.read_bytes() == b"jpeg-keep"
+    assert ext_results.is_file()
+    assert '"keep": true' in ext_results.read_text(encoding="utf-8")
+    # Symlink itself must still exist (no unlink-and-continue / auto-replace).
+    assert link.is_symlink()

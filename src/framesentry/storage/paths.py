@@ -11,6 +11,10 @@ from framesentry.core.config import OUTPUT_DIR_SUFFIX
 _PATH_ID_HEX_LEN = 10
 
 
+class UnsafeReviewPathError(RuntimeError):
+    """Raised when a review path is unsafe to clear (e.g. review_dir is a symlink)."""
+
+
 def normalize_abs_path_for_id(video_path: str | Path) -> str:
     """Case-normalized absolute path for stable review-dir ids (Windows-safe).
 
@@ -60,12 +64,26 @@ def clear_review_dir(review_dir: str | Path) -> Path:
     Only deletes content under ``review_dir`` itself. Does not wipe the output
     root, does not delete the source video, and does not follow symlinks that
     point outside the review directory.
+
+    If ``review_dir`` itself already exists and is a symlink, refuse cleanup
+    and raise ``UnsafeReviewPathError`` (do not follow / resolve into the
+    target or delete external contents). If only ``frames/`` is a symlink,
+    the link node may be removed without following into the target.
     """
     review = Path(review_dir)
     if not review.exists():
         review.mkdir(parents=True, exist_ok=True)
         (review / "frames").mkdir(parents=True, exist_ok=True)
         return review
+
+    # review_dir itself must not be a symlink — resolve() would follow it and
+    # subsequent deletes could wipe an out-of-tree target.
+    if review.is_symlink():
+        raise UnsafeReviewPathError(
+            f"Refusing to clear review directory that is a symlink: {review} "
+            f"(target would be followed by resolve(); out-of-tree delete blocked). "
+            "Remove the symlink manually if this path is intentional."
+        )
 
     try:
         review_resolved = review.resolve()

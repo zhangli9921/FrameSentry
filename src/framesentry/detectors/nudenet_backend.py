@@ -11,8 +11,10 @@ We must NOT patch site-packages. Instead ``NudeNetBackend``:
 1. Locates installed ``320n.onnx`` via ``Path(nudenet.__file__).parent / "320n.onnx"``
    (or an optional user model path — onnx is never committed to git).
 2. Creates ``onnxruntime.InferenceSession(model, providers=...)`` itself.
-3. GPU mode: ``["CUDAExecutionProvider", "CPUExecutionProvider"]``
-4. CPU mode: ``["CPUExecutionProvider"]``
+3. GPU mode: call ``ort.preload_dlls(directory="")`` *before* session create,
+   then ``["CUDAExecutionProvider", "CPUExecutionProvider"]``. Preload failure
+   raises (no silent CPU fallback). Injected ``session=`` skips preload.
+4. CPU mode: ``["CPUExecutionProvider"]`` — never calls CUDA preload.
 5. After create, inspects ``session.get_providers()``; if GPU was requested and
    ``CUDAExecutionProvider`` is not active → raises (no silent CPU fallback).
 6. Reimplements preprocess/postprocess equivalent to NudeNet 3.4.2
@@ -261,9 +263,23 @@ class NudeNetBackend:
         self.providers = select_providers(self.device)
 
         if session is not None:
+            # Caller-injected session: do not preload CUDA DLLs (no side effects).
             self.session = session
         else:
             import onnxruntime as ort
+
+            # GPU self-built session: preload pip NVIDIA CUDA/cuDNN DLLs first
+            # (ORT 1.29+; directory="" = site-packages). CPU must not call this.
+            if self.device == "gpu":
+                try:
+                    ort.preload_dlls(directory="")
+                except Exception as exc:  # noqa: BLE001
+                    raise GpuProviderUnavailableError(
+                        "Failed to preload CUDA/cuDNN DLLs before creating a GPU "
+                        f"InferenceSession: {exc}. "
+                        "Do not fall back to CPU; fix the GPU install "
+                        "(scripts/setup-gpu.ps1) and retry."
+                    ) from exc
 
             model = resolve_default_model_path(model_path)
             self.session = ort.InferenceSession(str(model), providers=self.providers)

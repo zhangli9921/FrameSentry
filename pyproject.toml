@@ -19,11 +19,12 @@ dependencies = [
 
 [project.optional-dependencies]
 cpu = ["onnxruntime>=1.16"]
-gpu = ["onnxruntime-gpu[cuda,cudnn]==1.29.0"]
 dev = [
     "pytest>=7.4",
     "onnxruntime>=1.16",
 ]
+# Windows NVIDIA GPU: do NOT use a pip extra. Use .\scripts\setup-gpu.ps1
+# (or the manual steps in requirements-gpu.txt). pip install ".[gpu]" is not supported.
 
 [project.scripts]
 framesentry = "framesentry.main:main"

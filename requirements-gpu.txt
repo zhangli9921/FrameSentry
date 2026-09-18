@@ -1,0 +1,14 @@
+# Windows NVIDIA GPU install — prefer scripts/setup-gpu.ps1 for a clean fresh install.
+#
+# Manual equivalent:
+#   1. Confirm Python 3.11
+#   2. pip uninstall -y onnxruntime onnxruntime-gpu
+#   3. pip install PySide6 opencv-python-headless numpy
+#   4. pip install --no-deps nudenet==3.4.2
+#   5. pip install -r requirements-gpu.txt
+#   6. pip install -e . --no-deps
+#
+# Never leave both onnxruntime and onnxruntime-gpu installed — they race on import.
+# No full CUDA Toolkit required; the cuda/cudnn extras ship the needed libs.
+# No secrets.
+onnxruntime-gpu[cuda,cudnn]==1.29.0

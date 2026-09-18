@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+
+# Build
+dist/
+build/
+
+# Logs
+*.log
+
+# Local runtime / models
+models/
+runtime/
+
+# Generated review output
+*.nsfw_review/
+results/
+
+# OS
+.DS_Store
+Thumbs.db

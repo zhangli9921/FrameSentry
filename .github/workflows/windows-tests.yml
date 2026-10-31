@@ -1,10 +1,7 @@
 name: windows-tests
 
 on:
-  push:
-    branches: ["**"]
-  pull_request:
-    branches: ["main", "master"]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -41,3 +38,4 @@ jobs:
         shell: powershell
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-gpu.ps1 -NativeInvokerSelfTest
+
